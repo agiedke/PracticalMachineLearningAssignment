@@ -1,0 +1,209 @@
+---
+title: "Assignment"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libraries, echo=FALSE, message = FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(glmnet)
+library(caretEnsemble)
+library(pander)
+library(knitr)
+```
+
+```{r paths, echo=FALSE}
+inp_path <- "C:/Users/arne/DS_Programming_Courses/Coursera/PracticalMachineLearning/week4/Assignment"
+setwd(inp_path)
+```
+
+## Data preparation
+
+We start with reading the data and investigating its dimensions.
+
+```{r read_quick_explore, echo=TRUE}
+# read data
+train <- read.csv(paste(inp_path, "pml-training.csv", sep ="/"))
+test <- read.csv(paste(inp_path, "pml-testing.csv", sep ="/"))
+
+# quick exploration
+dim(train)
+dim(test)
+```
+
+Although, training and test set have the same columns, many of the values in the test set are NA. As the goal is to make predictions on the test set we shall exclude variables which have missing values in the test set.
+
+```{r subset_data, echo=TRUE}
+opt <- "exclude_cols"
+
+### Subset data -> data which are mostly NA in train and always NA in test
+# Check if any variable of type logical in train -> no
+for (i in 1:ncol(train)){
+  if(sapply(train, class)[i]=="logical"){
+    print(names(train)[i])
+  }
+}
+# extracting vector of names of variables of type logical in test (=variables which are all NA)
+exclude <- c()
+for (i in 1:ncol(test)){
+  if(sapply(test, class)[i]=="logical"){
+    exclude <- c(exclude, names(test)[i])
+  }
+}
+# add redundant variables to vector
+exclude <- c(exclude, names(test)[1])
+# excluding variables of type logical from train and test
+if(opt=="exclude_cols"){
+  train <- train[,!(colnames(train) %in% exclude)]
+  test <- test[,!(colnames(test) %in% exclude)]
+}
+```
+
+Finally, we re-split the training set into training and validation set, in order to obtain unbiased accuracy measures on our models.
+
+```{r split_data, echo=TRUE}
+set.seed(98332)
+train_tmp <- train
+inTrain <- createDataPartition(y=train_tmp$classe,
+                               p=0.7, list=F)
+train <- train_tmp[inTrain,]
+valid <- train_tmp[-inTrain,]
+rm(train_tmp)
+```
+
+## Data Exploration
+
+Now we have a closer look at the data. We plot histograms for the user_name and classe variable as well as a cross-table including both variables:
+
+```{r explore_data1, echo=FALSE}
+qplot(train$user_name)
+qplot(train$classe)
+kable(table(train$user_name, train$classe))
+```
+
+We see that the data set is balanced in terms of user_name and not too unbalanced regarding the response variable. Furthermore, the different responses (A to E) seem to be quite evenly distributed accross user_names. 
+
+
+## Building Models
+
+We will train 3 different models that are suited to deal with multinomial classification problems:
+
+- Penalized Multinomial Regression
+- SVM
+- Random Forest
+
+We expect the best accuracy for random forest as it is very well suited to deal with multiclass classification problems especially when we have continuous as well as categorical variables as potential predictors. For each model we use 10-fold cross-validation with 3 repeats and investigate the model performance on the validation set. In order to save computing time, we pre-calculated the models and simply load them in this RMD-file. Hence, the code for the model calculation is out-commented in the following blocks.
+
+We start with the Penalized Multinomial Regression model:
+
+```{r glm_model, echo=FALSE}
+## Penalized Multinomial Regression
+# tweak trainControl parameter to use cross validation
+# ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3, 
+#                      savePredictions = TRUE, 
+#                      classProbs=TRUE)
+# # build model with cross-validation
+# mod_glm <- train(classe~.,  data=train, method="multinom",
+#                  trControl = ctrl, tuneLength = 5, trace = FALSE)
+# # save model
+# save(mod_glm, file = paste(inp_path, "mod_glm.RData", sep ="/"))
+mod_glm <- readRDS("mod_glm.rds")
+mod_glm
+# # predict on validation set
+predictions_glm <- predict(mod_glm, newdata=valid)
+stat_glm <- confusionMatrix(data=predictions_glm, valid$classe)
+stat_glm
+```
+
+The accuracy is not that high at 67%.
+
+Second we try an svm model:
+
+```{r svm_model, echo=FALSE}
+# ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3, 
+#                      savePredictions = TRUE, 
+#                      classProbs=TRUE)
+# mod_svm <- train(classe~., data=train, method = "svmLinear", trControl = ctrl, trace = FALSE)
+# # save model
+# saveRDS(mod_svm, paste(inp_path, "mod_svm.rds", sep ="/"))
+mod_svm <- readRDS("mod_svm.rds")
+head(mod_svm$pred)
+predictions_svm <- predict(mod_svm, newdata=valid)
+stat_svm <- confusionMatrix(data=predictions_svm, valid$classe)
+stat_svm
+```
+
+Accuracy, sensitivity and specificity improve qute a bit, using the svm model.
+
+The last model we try is the computationally quite expensive Random Forest:
+
+```{r rf_model, echo=FALSE}
+# control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, 
+#                         savePredictions = TRUE, 
+#                         classProbs=TRUE)
+# metric <- "Accuracy"
+# mtry <- sqrt(ncol(train))
+# mtry <- 3
+# tunegrid <- expand.grid(.mtry=mtry)
+# 
+# mod_rf <- train(classe~., data = train, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control, trace = FALSE)
+# saveRDS(mod_rf, paste(inp_path, "mod_rf.rds", sep ="/"))
+mod_rf <- readRDS("mod_rf.rds")
+# print(mod_rf)
+predictions_rf <- predict(mod_rf, valid) # storing predictions no test set necessary -> unbiased predictors due to inherent cross-validation in rf
+stat_rf <- confusionMatrix(predictions_rf, as.factor(valid$classe))
+stat_rf
+# save model
+```
+
+The model improves a lot with an accuracy of close to 100%.
+
+
+## Conclusion
+
+Out of the three investigated model the best performing one is random forest with highest Accuracy and Kappa.
+
+```{r comparing_models, echo=FALSE}
+stats <- as.data.frame(rbind(stat_glm$overall, stat_svm$overall, stat_rf$overall))
+stats$model <- ""
+stats$model[1] <- "glm"
+stats$model[2] <- "svm"
+stats$model[3] <- "rf"
+stats <- stats %>%
+  select(model, Accuracy, Kappa)
+kable(stats)
+```
+
+Finally we plot the 9 most relevant predictors:
+
+```{r important_vars, echo=FALSE}
+# variable importance of best model (random forest)
+var_imp <- varImp(mod_rf, scale = T)
+#var_imp
+vars <- row.names(var_imp$importance)[var_imp$importance$Overall %in% sort(var_imp$importance$Overall, 
+                                                   decreasing = T)[1:9]]
+# Examining Clusters
+# plotting variables explaining some variation in classe
+numericClasse <- as.numeric(as.factor(train$classe))
+#vars <- c(9,18,19,20,24,26,30,42,48)
+par(mfrow=c(3,3))
+for(i in vars){
+  (plot(train[,i],pch=19,col=numericClasse,ylab=i))
+}
+```
+
+## Prediction on Test Set
+
+Now we may use the Random Forest model make predictions on the test set:
+
+```{r predictions, echo=TRUE}
+predictions_rf <- predict(mod_rf, test)
+predictions_rf
+```
